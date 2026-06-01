@@ -121,20 +121,33 @@ def process_with_gpt(
         "chat_id": chat_id or CHAT_ID,
     }
 
-    try:
-        response = requests.post(
-            f"{BASE}/v1/chat/completions",
-            json=payload,
-            headers={"Authorization": AUTH_HEADER, "Content-Type": "application/json"},
-            timeout=120,
-        )
-        response.raise_for_status()
-    except requests.exceptions.Timeout:
-        raise RuntimeError("GPT timeout: VPS did not respond within 120 seconds")
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError("VPS unavailable: could not connect to GPT endpoint")
-    except requests.exceptions.HTTPError as e:
-        raise RuntimeError(f"GPT HTTP error: {e.response.status_code} {e.response.text}")
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            response = requests.post(
+                f"{BASE}/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": AUTH_HEADER, "Content-Type": "application/json"},
+                timeout=120,
+            )
+            response.raise_for_status()
+            break
+        except requests.exceptions.Timeout:
+            last_error = RuntimeError("GPT timeout: VPS did not respond within 120 seconds")
+            logger.warning("[RETRY %d/3] GPT timeout, retrying...", attempt)
+        except requests.exceptions.ConnectionError:
+            last_error = RuntimeError("VPS unavailable: could not connect to GPT endpoint")
+            logger.warning("[RETRY %d/3] Connection error, retrying...", attempt)
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code
+            text = e.response.text
+            last_error = RuntimeError(f"GPT HTTP error: {status} {text}")
+            if status == 502 and "HTTP/2" in text:
+                logger.warning("[RETRY %d/3] HTTP/2 stream error (502), retrying...", attempt)
+            else:
+                raise last_error
+    else:
+        raise last_error
 
     logger.info("[INFO] GPT response received")
 
