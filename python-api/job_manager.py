@@ -173,25 +173,59 @@ def run_job(job_id: str):
         for i, scene in enumerate(scenes, 1):
             scene_num = scene["scene"]
 
+            # ── Image generation + quality validation ─────────────────────────
             _update(job_id, step=f"Scene {i}/{total}: Generating image", completed_scenes=i - 1)
             logger.info("[JOB %s] Scene %d/%d — generating image", job_id, i, total)
+
+            current_image_prompt = scene["image_prompt"]
             image_url = generate_image(
-                scene["image_prompt"],
+                current_image_prompt,
                 chat_id=chat_id_image,
                 image_style=image_style,
                 negative_prompt=negative_prompt,
             )
+
+            # Validate image quality — up to 2 rounds (original + 1 retry)
+            _update(job_id, step=f"Scene {i}/{total}: Validating image quality")
+            from quality_validator import validate_image
+            img_passed, improved_image_prompt = validate_image(
+                image_url, current_image_prompt, chat_id=chat_id_image or chat_id_gpt
+            )
+
+            if not img_passed:
+                logger.info(
+                    "[JOB %s] Scene %d — image failed QA, regenerating with improved prompt",
+                    job_id, i,
+                )
+                _update(job_id, step=f"Scene {i}/{total}: Regenerating image (QA retry)")
+                try:
+                    image_url = generate_image(
+                        improved_image_prompt,
+                        chat_id=chat_id_image,
+                        image_style=image_style,
+                        negative_prompt=negative_prompt,
+                    )
+                    current_image_prompt = improved_image_prompt
+                    logger.info("[JOB %s] Scene %d — image regenerated after QA", job_id, i)
+                except Exception as regen_err:
+                    logger.warning(
+                        "[JOB %s] Scene %d — image QA-regen failed (%s), keeping original",
+                        job_id, i, regen_err,
+                    )
+
             logger.info("[JOB %s] Scene %d — saving image", job_id, i)
             local_image_path = save_image(image_url, job_id, scene_num)
             image_local_url = f"/api/files/images/{os.path.basename(local_image_path)}"
 
+            # ── Video generation ──────────────────────────────────────────────
             _update(job_id, step=f"Scene {i}/{total}: Generating video")
             logger.info("[JOB %s] Scene %d/%d — generating video", job_id, i, total)
             video_url = None
+            current_video_prompt = scene["video_prompt"]
             try:
                 video_url = generate_video(
                     image_url=image_url,
-                    video_prompt=scene["video_prompt"],
+                    video_prompt=current_video_prompt,
                     chat_id=chat_id_video or chat_id_image or "6a0ed42f-ecb0-8324-a176-6954e97a9a44",
                     aspect_ratio=aspect_ratio,
                     video_length=video_length,
@@ -268,6 +302,89 @@ def run_job(job_id: str):
             outro_text=outro_text,
             bg_color=bg_color,
         )
+
+        # ── Final video quality validation ────────────────────
+        _update(job_id, status="combining", step="Validating final video quality")
+        from quality_validator import validate_final_video
+        vid_passed, improved_scenes = validate_final_video(
+            final_path, completed_scenes, chat_id=chat_id_gpt
+        )
+
+        if not vid_passed:
+            logger.info("[JOB %s] Final video failed QA — regenerating with improved prompts", job_id)
+            _update(job_id, status="combining", step="Regenerating scenes (video QA retry)")
+
+            retry_video_paths = []
+            for i, scene in enumerate(improved_scenes, 1):
+                scene_num = scene["scene"]
+                saved_img_path = os.path.join(
+                    STORAGE_DIR, "images", f"{job_id}_scene{scene_num}.png"
+                )
+                # Re-use saved image if available; use stored image_url from completed_scenes
+                orig = next((s for s in completed_scenes if s["scene"] == scene_num), {})
+                retry_image_url = orig.get("image_url", "")
+
+                _update(job_id, step=f"Scene {i}/{total}: QA-retry video generation")
+                try:
+                    retry_video_url = generate_video(
+                        image_url=retry_image_url,
+                        video_prompt=scene["video_prompt"],
+                        chat_id=chat_id_video or chat_id_image or "6a0ed42f-ecb0-8324-a176-6954e97a9a44",
+                        aspect_ratio=aspect_ratio,
+                        video_length=video_length,
+                        resolution=resolution,
+                        preset=preset,
+                        motion_strength=motion_strength,
+                        seed=seed,
+                        loop=loop,
+                        negative_video_prompt=negative_video_prompt,
+                    )
+                    retry_video_path = save_video(retry_video_url, job_id, f"{scene_num}_retry")
+                    logger.info("[JOB %s] Scene %d QA-retry video saved", job_id, scene_num)
+                except Exception as rv_err:
+                    logger.warning(
+                        "[JOB %s] Scene %d QA-retry video failed: %s — keeping original clip",
+                        job_id, scene_num, rv_err,
+                    )
+                    retry_video_path = saved_video_paths[i - 1] if i - 1 < len(saved_video_paths) else saved_video_paths[-1]
+
+                # Re-apply sound effect if enabled
+                sound_name = (scene.get("sound_effect") or "").strip()
+                if sound_effects and sound_name and sound_name.lower() not in ("null", "none", ""):
+                    sound_out = retry_video_path.replace(".mp4", "_sfx.mp4")
+                    try:
+                        retry_video_path = apply_sound_to_clip(
+                            clip_path=retry_video_path,
+                            sound_name=sound_name,
+                            output_path=sound_out,
+                        )
+                    except Exception:
+                        pass
+
+                retry_video_paths.append(retry_video_path)
+
+            if retry_video_paths:
+                _update(job_id, status="combining", step="Recombining videos after QA retry")
+                retry_job_id = f"{job_id}_retry"
+                final_path = combine_videos(
+                    video_paths=retry_video_paths,
+                    job_id=retry_job_id,
+                    background_music_url=background_music,
+                    music_volume=music_volume,
+                    music_fade_in=music_fade_in,
+                    music_fade_out=music_fade_out,
+                    fade=bool(fade),
+                    fade_duration=fade_duration,
+                    video_speed=video_speed,
+                    transition=transition,
+                    fps=fps,
+                    watermark_text=watermark_text,
+                    mute_original_audio=mute_original_audio,
+                    intro_text=intro_text,
+                    outro_text=outro_text,
+                    bg_color=bg_color,
+                )
+                logger.info("[JOB %s] QA-retry final video saved: %s", job_id, final_path)
 
         # ── Trim silence (optional) ───────────────────────────
         if trim_silence_opt:
