@@ -1,0 +1,106 @@
+import requests
+import json
+import time
+
+BASE = "https://e7a11b07-d8f2-46db-a192-b3f7c7621524-00-1cizpbwiily9h.pike.replit.dev"
+
+
+
+
+dt = """Time Code: 00:00-00:04
+Camera Move: static
+Scene: A traditional Japanese herbalist's shop or apothecary with wooden shelves filled with glass jars of herbs and calligraphic scrolls on the wall.
+Characters: elderly Japanese woman, young woman showing her back
+Actions: The elderly woman in a green traditional outfit gestures toward the young woman's back., The young woman's back transitions from having visible skin folds to being smooth and toned while she changes into a red dress.
+
+---
+
+Time Code: 00:05-00:08
+Camera Move: static
+Scene: The same traditional Japanese herbal shop interior.
+Characters: elderly Japanese woman, young woman in a red backless dress
+Actions: The elderly woman points at the young woman's smooth back., The elderly woman speaks enthusiastically to the camera.
+
+---
+
+Time Code: 00:09-00:14
+Camera Move: close-up
+Scene: Close-up shot of a woman's back with significant skin folds, wearing a red bra.
+Characters: unidentified woman's back, elderly Japanese woman (in overlay)
+Actions: A digital water ripple effect passes over the skin folds., The elderly woman appears in a circular overlay at the bottom, talking and gesturing.
+
+---
+
+Time Code: 00:15-01:24
+Camera Move: medium close-up
+Scene: Inside the herbalist shop, centered on the elderly woman. Shelves of dried herbs in glass jars are visible in the background.
+Characters: elderly Japanese woman
+Actions: The woman speaks directly to the camera with expressive hand movements., She presses her palms together and gestures with her hands to emphasize her points., She maintains a friendly and knowledgeable demeanor throughout the explanation."""
+# ── Step 1: Job Submit ─────────────────────────────────────────────────────────
+response = requests.post(f"{BASE}/api/generate", json={
+    "details": dt,
+
+    # GPT Controls
+    #"max_scenes": 2,
+    "language": "english",
+    "chat_id_gpt": '6a1a95ff-c688-8321-b6d1-0bac40eaa846',
+
+    # Image Controls
+    "negative_prompt": "text, watermark, blurry",
+    "chat_id_image": '6a1abf28-ef00-8321-a45a-f0fa0e30ff08',
+
+    # Video Generation Controls (Grok API)
+    "chat_id_video": None,
+    "aspect_ratio": "9:16",
+    "video_length": 10,
+    "resolution": "720p",
+    "preset": "normal",
+    "motion_strength": 0.8,
+    "seed": None,
+    "loop": False,
+    "negative_video_prompt": "text, watermark, shaky cam",
+
+    # Final Video Controls (ffmpeg)
+    "video_speed": 1.0,
+    "transition": "crossfade",
+    "fade_duration": 0.5,
+    "fps": 24,
+    "mute_original_audio": False,
+
+    # Music Controls
+    "background_music": False,
+    "music_volume": 1.0,
+    "music_fade_in": 0.2,
+    "music_fade_out": 0.2,
+    "fade": True,
+    "sound_effects": False,
+    "trending_sounds": False,
+    "trim_silence": True,
+    "voiceover": "This is how her back looked when she first came to me. And this is how her back looks 50 days later. No gym, no strict diets. Just listen to me. If you don't want to be ashamed of your body this summer, the best food you can eat is not ginger, it's not turmeric, and no, blueberries are not the answer. One small teaspoon of this works 70% better than ginger and turmeric combined. Yet in America almost nobody is talking about it. This is not only about fat. When you wake tired, when your body is aching, when your legs feel heavy, when sleep is running away from you, stress and inflammation have taken a seat inside your body. Stress slows your blood, drains your strength, and locks fat in place. You wake stiff, your legs feel full. You are tired without reason. This is not age. This is your body crying for balance. This remedy has been used in Asian communities since before your grandmother's grandmother. Our elders did not guess, they knew. It is called Rhodiola rosea. It opens circulation, burns fat, returns energy, and teaches the body how to rest again. I've given this to people who were finished, tired, stuck. They return after weeks looking lighter, clearer, alive. The only thing they changed? A small amount every morning. But many people sell weak and fake versions that will waste your time. Write that in the comments and I will send you the Amazon link. But you must be following me or I cannot reach you.",
+})
+
+
+data = response.json()
+print("Job submitted:", json.dumps(data, indent=2))
+job_id = data["job_id"]
+
+# ── Step 2: Poll Status ────────────────────────────────────────────────────────
+while True:
+    data = requests.get(f"{BASE}/api/job/{job_id}").json()
+    print(f"[{data['status']}] {data['step']} | scenes: {data['completed_scenes']}/{data['total_scenes']}")
+
+    if data["status"] == "completed":
+        print("\n DONE!")
+        print(f"\nFinal Video:\n  {BASE}{data['final_video_url']}")
+        print(f"\nScenes:")
+        for s in data["scenes"]:
+            print(f"\n  Scene {s['scene']}:")
+            print(f"    Image : {BASE}{s['image_local_url']}")
+            print(f"    Video : {BASE}{s['video_local_url']}")
+        break
+
+    elif data["status"] == "failed":
+        print(f"\n FAILED: {data['error']}")
+        break
+
+    time.sleep(5)

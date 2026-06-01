@@ -1,36 +1,45 @@
-# [Project name]
+# AI Video Remake
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Python Flask API that generates AI-powered short videos from scene descriptions. Paste a video script or YouTube URL, and it produces images per scene, animates them into video clips, then merges everything into a final MP4 — with optional voiceover, music, sound effects, and transitions.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `python python-api/app.py` — run the Flask API (port 8080, served at `/api`)
+- Required env: `PORT` — defaults to 8080
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11, Flask 3.x
+- ffmpeg / ffprobe for video processing
+- yt-dlp for YouTube extraction
+- GPT-4o via private VPS for scene analysis
+- Image generation via private VPS (gpt-image-2 model)
+- Video generation via private VPS (grok-imagine-1.0-video model)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `python-api/app.py` — Flask app entry point, all API routes
+- `python-api/job_manager.py` — in-memory job queue + job runner (threading)
+- `python-api/gpt_processor.py` — GPT scene analysis
+- `python-api/image_generator.py` — image generation with retry logic
+- `python-api/video_generator.py` — video generation (Grok API)
+- `python-api/video_combiner.py` — ffmpeg pipeline: combine, speed, fade, watermark, music
+- `python-api/sound_manager.py` — sound catalog + trending sound generation
+- `python-api/prompt_extractor.py` — YouTube content extraction via yt-dlp
+- `python-api/storage/` — generated images, videos, and final outputs
+
+## API Endpoints
+
+- `POST /api/generate` — submit a job (pass `details` text or `url` YouTube link)
+- `GET /api/job/<job_id>` — poll job status and get result URLs
+- `GET /api/files/<path>` — serve generated files (images, videos, final)
+- `GET /api/healthz` — health check
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Jobs run in background threads; in-memory `_jobs` dict tracks state — restarts clear job history
+- Scene video failures fall back to a static image clip (6s) so the job always completes
+- All VPS calls use `Bearer ranaji` auth to the private GPU server at 217.77.8.115
 
 ## User preferences
 
@@ -38,8 +47,6 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Always pass `PORT=8080` when running manually; the workflow config sets this automatically
+- Sound effect MP3s must exist in `python-api/storage/sounds/` — they are downloaded from the repo
+- Trending sounds are generated on first use via ffmpeg
