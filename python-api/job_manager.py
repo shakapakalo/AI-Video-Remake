@@ -128,7 +128,24 @@ def run_job(job_id: str):
 
         # ── Voiceover extraction ───────────────────────────────
         voiceover_text = None
-        if extract_voiceover_opt and job.get("url"):
+        voiceover_param_raw = params.get("voiceover") or ""
+
+        # If voiceover param looks like a URL, auto-extract transcript from it
+        if voiceover_param_raw and voiceover_param_raw.strip().lower().startswith(("http://", "https://")):
+            from voiceover_extractor import extract_voiceover
+            voiceover_url = voiceover_param_raw.strip()
+            _update(job_id, step=f"Extracting transcript from voiceover URL")
+            logger.info("[JOB %s] voiceover param is a URL — extracting transcript: %s", job_id, voiceover_url)
+            voiceover_text = extract_voiceover(voiceover_url)
+            if voiceover_text:
+                logger.info("[JOB %s] Voiceover extracted from URL (%d chars)", job_id, len(voiceover_text))
+                # Replace the raw URL with the extracted transcript for GPT
+                voiceover_param_raw = voiceover_text
+            else:
+                logger.warning("[JOB %s] Voiceover URL extraction returned nothing", job_id)
+                voiceover_param_raw = ""
+
+        elif extract_voiceover_opt and job.get("url"):
             from voiceover_extractor import extract_voiceover, is_supported_url
             if is_supported_url(job["url"]):
                 _update(job_id, step="Extracting voice-over from video")
@@ -151,7 +168,6 @@ def run_job(job_id: str):
             extracted_text = f"{extracted_text}\n\n[VOICE-OVER TRANSCRIPT]\n{voiceover_text}"
 
         _update(job_id, status="processing", step="Analyzing scenes with GPT")
-        voiceover_param = params.get("voiceover") or ""
         gpt_result = process_with_gpt(
             extracted_text,
             chat_id=chat_id_gpt,
@@ -159,7 +175,7 @@ def run_job(job_id: str):
             language=language,
             sound_effects=sound_effects,
             trending_sounds=trending_sounds,
-            voiceover=voiceover_param or None,
+            voiceover=voiceover_param_raw or None,
         )
 
         scenes = gpt_result.get("scenes", [])
