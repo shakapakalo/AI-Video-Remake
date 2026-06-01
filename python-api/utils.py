@@ -3,14 +3,34 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Social / video platforms supported by yt-dlp
+_SOCIAL_DOMAINS = (
+    "youtube.com", "youtu.be",
+    "facebook.com", "fb.watch", "web.facebook.com",
+    "instagram.com",
+    "tiktok.com", "vm.tiktok.com",
+    "twitter.com", "x.com",
+    "reddit.com",
+    "twitch.tv",
+    "vimeo.com",
+    "dailymotion.com",
+)
+
 
 def is_valid_youtube_shorts_url(url: str) -> bool:
-    patterns = [
-        r"https?://(www\.)?youtube\.com/shorts/[\w-]+",
-        r"https?://youtu\.be/[\w-]+",
-        r"https?://(www\.)?youtube\.com/watch\?v=[\w-]+",
-    ]
-    return any(re.match(p, url) for p in patterns)
+    """Legacy name kept for backward compat — now accepts any supported social URL."""
+    return is_valid_social_url(url)
+
+
+def is_valid_social_url(url: str) -> bool:
+    """Return True if the URL belongs to a yt-dlp-supported platform."""
+    lower = url.lower()
+    return lower.startswith("http") and any(d in lower for d in _SOCIAL_DOMAINS)
+
+
+def is_url(value: str) -> bool:
+    """Return True if the string looks like an HTTP(S) URL."""
+    return bool(re.match(r"https?://\S+", value.strip()))
 
 
 def validate_scenes(scenes: list) -> tuple[bool, str]:
