@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import time
@@ -27,18 +28,9 @@ def generate_video(
     if negative_video_prompt:
         prompt_text += f". Avoid: {negative_video_prompt}"
 
-    video_config: dict = {
-        "aspect_ratio": aspect_ratio,
-        "video_length": video_length,
-        "resolution_name": resolution,
-        "preset": preset,
-    }
-    if motion_strength is not None:
-        video_config["motion_strength"] = float(motion_strength)
-    if seed is not None:
-        video_config["seed"] = int(seed)
-    if loop:
-        video_config["loop"] = True
+    # Use a fresh UUID per request — grok2api requires unique chat_id per video
+    import uuid
+    fresh_chat_id = str(uuid.uuid4())
 
     payload = {
         "model": "grok-imagine-1.0-video",
@@ -51,48 +43,141 @@ def generate_video(
                 ],
             }
         ],
-        "video_config": video_config,
-        "chat_id": chat_id,
-        "stream": False,
+        "video_config": {
+            "aspect_ratio": aspect_ratio,
+            "video_length": video_length,
+            "resolution_name": resolution,
+            "preset": preset,
+        },
+        "chat_id": fresh_chat_id,
+        "stream": True,   # stream=True to avoid 60s idle timeout on server
     }
 
     last_error = None
     for attempt in range(1, 6):
         try:
-            response = requests.post(
-                f"{VIDEO_BASE}/v1/chat/completions",
-                headers={"Authorization": AUTH_HEADER, "Content-Type": "application/json"},
-                json=payload,
-                timeout=600,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            content = data["choices"][0]["message"]["content"]
-            logger.info("Video API response (attempt %d): %s", attempt, content[:200])
-
-            patterns = [
-                r'https?://[^\s\)\]"\'>]+\.mp4[^\s\)\]"\'>]*',
-                r'http://[^\s\)\]"\'>]+:8885/v1/files/video[^\s\)\]"\'>]*',
-                r'https?://[^\s\)\]"\'>]+/v1/files/video[^\s\)\]"\'>]*',
-            ]
-            for pattern in patterns:
-                urls = re.findall(pattern, content)
-                if urls:
-                    return urls[0]
-
-            last_error = RuntimeError(f"No video URL found in response: {content[:300]}")
+            video_url = _stream_video(payload, attempt)
+            if video_url:
+                return video_url
+            last_error = RuntimeError(f"No video URL in streamed response")
 
         except requests.exceptions.Timeout:
-            last_error = RuntimeError("Video generation timeout after 600 seconds")
+            last_error = RuntimeError("Video generation timeout")
         except requests.exceptions.ConnectionError:
             last_error = RuntimeError("VPS unavailable for video generation")
         except requests.exceptions.HTTPError as e:
-            last_error = RuntimeError(f"Video generation HTTP error: {e.response.status_code} {e.response.text[:200]}")
+            last_error = RuntimeError(
+                f"Video generation HTTP error: {e.response.status_code} {e.response.text[:200]}"
+            )
 
         if attempt < 5:
+            # Refresh chat_id on each retry
+            payload["chat_id"] = str(uuid.uuid4())
             wait = attempt * 5
-            logger.warning("Video generation attempt %d/5 failed: %s — retrying in %ds", attempt, last_error, wait)
+            logger.warning(
+                "Video generation attempt %d/5 failed: %s — retrying in %ds",
+                attempt, last_error, wait,
+            )
             time.sleep(wait)
 
     raise last_error
+
+
+def _stream_video(payload: dict, attempt: int) -> str | None:
+    """
+    Send streaming request to grok2api VPS and parse SSE chunks.
+    Returns the first video URL found in the stream, or None.
+    The stream can run for up to 5 minutes (video generation takes ~2-3 min).
+    """
+    url_patterns = [
+        r'https?://[^\s\)\]"\'>]+\.mp4[^\s\)\]"\'>]*',
+        r'http://[^\s\)\]"\'>]+:8885/v1/files/video[^\s\)\]"\'>]*',
+        r'https?://[^\s\)\]"\'>]+/v1/files/video[^\s\)\]"\'>]*',
+        r'https?://assets\.grok\.com/[^\s\)\]"\'>]+',
+    ]
+
+    with requests.post(
+        f"{VIDEO_BASE}/v1/chat/completions",
+        headers={"Authorization": AUTH_HEADER, "Content-Type": "application/json"},
+        json=payload,
+        timeout=(15, 360),   # (connect timeout, read timeout) — 6 min read
+        stream=True,
+    ) as resp:
+        resp.raise_for_status()
+
+        accumulated = ""
+        chunk_count = 0
+
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line:
+                continue
+
+            # SSE lines: "data: {...}" or "data: [DONE]"
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            chunk_count += 1
+
+            # Check for upstream error in SSE
+            if "error" in chunk:
+                err_msg = chunk["error"].get("message", str(chunk["error"]))
+                logger.warning(
+                    "Video attempt %d SSE error: %s", attempt, err_msg
+                )
+                return None
+
+            # Extract delta content
+            choices = chunk.get("choices", [])
+            if not choices:
+                continue
+
+            delta = choices[0].get("delta", {})
+            content_piece = delta.get("content", "")
+            if content_piece:
+                accumulated += content_piece
+
+            finish = choices[0].get("finish_reason")
+
+            # Log progress tokens (contain Chinese progress text or video URL)
+            if content_piece:
+                logger.info(
+                    "Video attempt %d chunk #%d: %s",
+                    attempt, chunk_count, content_piece[:120],
+                )
+
+            # Check accumulated content for video URL
+            for pattern in url_patterns:
+                urls = re.findall(pattern, accumulated)
+                if urls:
+                    video_url = urls[0]
+                    logger.info(
+                        "Video attempt %d: URL found after %d chunks: %s",
+                        attempt, chunk_count, video_url,
+                    )
+                    return video_url
+
+            if finish == "stop":
+                break
+
+        logger.info(
+            "Video attempt %d stream ended — %d chunks, accumulated: %s",
+            attempt, chunk_count, accumulated[:300],
+        )
+
+        # Final check on accumulated content
+        for pattern in url_patterns:
+            urls = re.findall(pattern, accumulated)
+            if urls:
+                return urls[0]
+
+        return None
