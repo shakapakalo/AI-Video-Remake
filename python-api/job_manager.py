@@ -9,25 +9,75 @@ logger = logging.getLogger(__name__)
 
 
 def _make_static_clip(image_path: str, job_id: str, scene_num: int) -> str:
-    """Convert a saved image into a 6-second static video clip using ffmpeg."""
+    """
+    Convert a saved image into a 6-second animated video clip using ffmpeg.
+    Applies a Ken Burns (zoom + pan) effect so the clip looks dynamic rather
+    than a still frame.  Four patterns rotate by scene number.
+    """
     out_path = os.path.join(
         os.path.dirname(__file__), "storage", "videos",
         f"{job_id}_scene{scene_num}_static.mp4"
     )
+
+    fps = 24
+    duration = 6
+    total_frames = fps * duration  # 144
+
+    # Four Ken-Burns patterns, chosen by scene index
+    patterns = [
+        # 0 – slow zoom in from centre
+        (
+            f"scale=8000:-1,zoompan=z='min(zoom+0.0015,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={total_frames}:s=1080x1920:fps={fps}"
+        ),
+        # 1 – slow zoom out from centre
+        (
+            f"scale=8000:-1,zoompan=z='if(lte(zoom,1.0),1.5,max(zoom-0.0015,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={total_frames}:s=1080x1920:fps={fps}"
+        ),
+        # 2 – pan left to right while zoomed in
+        (
+            f"scale=8000:-1,zoompan=z='1.3':x='if(gte(on,1),x+2,0)':y='ih/2-(ih/zoom/2)'"
+            f":d={total_frames}:s=1080x1920:fps={fps}"
+        ),
+        # 3 – pan top to bottom while zoomed in
+        (
+            f"scale=8000:-1,zoompan=z='1.3':x='iw/2-(iw/zoom/2)':y='if(gte(on,1),y+2,0)'"
+            f":d={total_frames}:s=1080x1920:fps={fps}"
+        ),
+    ]
+
+    vf = patterns[int(scene_num) % len(patterns)]
+
     cmd = [
         "ffmpeg", "-y",
         "-loop", "1", "-i", image_path,
-        "-c:v", "libx264", "-t", "6",
+        "-c:v", "libx264",
+        "-t", str(duration),
         "-pix_fmt", "yuv420p",
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
-        "-r", "24",
+        "-vf", vf,
+        "-r", str(fps),
+        "-preset", "fast",
         out_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
-        logger.error("Static clip creation failed: %s", result.stderr[-200:])
-        raise RuntimeError(f"Static clip from image failed: {result.stderr[-100:]}")
-    logger.info("Static clip created from image: %s", os.path.basename(out_path))
+        logger.warning("Ken Burns clip failed (%s), falling back to plain static", result.stderr[-120:])
+        # Fallback: plain static clip without zoom
+        cmd_plain = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", image_path,
+            "-c:v", "libx264", "-t", str(duration),
+            "-pix_fmt", "yuv420p",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black",
+            "-r", str(fps),
+            out_path,
+        ]
+        result2 = subprocess.run(cmd_plain, capture_output=True, text=True)
+        if result2.returncode != 0:
+            raise RuntimeError(f"Static clip from image failed: {result2.stderr[-100:]}")
+
+    logger.info("Animated clip created (scene %s): %s", scene_num, os.path.basename(out_path))
     return out_path
 
 _jobs: dict[str, dict] = {}
