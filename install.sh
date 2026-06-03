@@ -2,11 +2,11 @@
 # =============================================================================
 #  AI Video Remake API — 1-Click Contabo Install
 #  Run as root on a fresh Ubuntu 22.04 / Debian 12 VPS:
-#    curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/install.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/shakapakalo/AI-Video-Remake/main/install.sh | bash
 # =============================================================================
 set -euo pipefail
 
-REPO_URL="https://github.com/YOUR_USER/YOUR_REPO.git"
+REPO_URL="https://github.com/shakapakalo/AI-Video-Remake.git"
 INSTALL_DIR="/opt/ai-video-remake"
 SERVICE_NAME="ai-video-remake"
 PYTHON_BIN="python3"

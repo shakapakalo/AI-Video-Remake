@@ -4,7 +4,7 @@
 #  Run on your Contabo VPS:
 #    bash /opt/ai-video-remake/update.sh
 #  OR pull and run directly:
-#    curl -fsSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/update.sh | bash
+#    curl -fsSL https://raw.githubusercontent.com/shakapakalo/AI-Video-Remake/main/update.sh | bash
 # =============================================================================
 set -euo pipefail
 

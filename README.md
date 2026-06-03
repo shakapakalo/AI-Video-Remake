@@ -234,3 +234,5 @@ POST /api/generate
 
 See [`install.sh`](./install.sh) for 1-click Contabo setup.  
 See [`update.sh`](./update.sh) for 1-click pull-and-restart from GitHub.
+
+**GitHub repo:** https://github.com/shakapakalo/AI-Video-Remake
