@@ -23,7 +23,6 @@ def _make_static_clip(image_path: str, job_id: str, scene_num: int) -> str:
     duration = 6
     total_frames = fps * duration  # 144
 
-    # Four Ken-Burns patterns, chosen by scene index
     patterns = [
         # 0 – slow zoom in from centre
         (
@@ -63,7 +62,6 @@ def _make_static_clip(image_path: str, job_id: str, scene_num: int) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         logger.warning("Ken Burns clip failed (%s), falling back to plain static", result.stderr[-120:])
-        # Fallback: plain static clip without zoom
         cmd_plain = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", image_path,
@@ -170,7 +168,7 @@ def run_job(job_id: str):
     trending_sounds      = bool(params.get("trending_sounds", False))
 
     try:
-        # ── Trending sounds: generate before GPT ──────────────
+        # ── Trending sounds ────────────────────────────────────
         if trending_sounds:
             from sound_manager import ensure_trending_sounds
             _update(job_id, step="Downloading trending sounds")
@@ -180,16 +178,14 @@ def run_job(job_id: str):
         voiceover_text = None
         voiceover_param_raw = params.get("voiceover") or ""
 
-        # If voiceover param looks like a URL, auto-extract transcript from it
         if voiceover_param_raw and voiceover_param_raw.strip().lower().startswith(("http://", "https://")):
             from voiceover_extractor import extract_voiceover
             voiceover_url = voiceover_param_raw.strip()
-            _update(job_id, step=f"Extracting transcript from voiceover URL")
+            _update(job_id, step="Extracting transcript from voiceover URL")
             logger.info("[JOB %s] voiceover param is a URL — extracting transcript: %s", job_id, voiceover_url)
             voiceover_text = extract_voiceover(voiceover_url)
             if voiceover_text:
                 logger.info("[JOB %s] Voiceover extracted from URL (%d chars)", job_id, len(voiceover_text))
-                # Replace the raw URL with the extracted transcript for GPT
                 voiceover_param_raw = voiceover_text
             else:
                 logger.warning("[JOB %s] Voiceover URL extraction returned nothing", job_id)
@@ -204,7 +200,7 @@ def run_job(job_id: str):
                 if voiceover_text:
                     logger.info("[JOB %s] Voiceover extracted (%d chars)", job_id, len(voiceover_text))
 
-        # ── Content extraction ────────────────────────────────
+        # ── Content extraction ─────────────────────────────────
         direct_details = params.get("details")
         if direct_details:
             logger.info("[JOB %s] Using provided details directly (skipping YouTube extraction)", job_id)
@@ -239,59 +235,29 @@ def run_job(job_id: str):
         for i, scene in enumerate(scenes, 1):
             scene_num = scene["scene"]
 
-            # ── Image generation + quality validation ─────────────────────────
+            # ── Image generation ──────────────────────────────
             _update(job_id, step=f"Scene {i}/{total}: Generating image", completed_scenes=i - 1)
             logger.info("[JOB %s] Scene %d/%d — generating image", job_id, i, total)
 
-            current_image_prompt = scene["image_prompt"]
             image_url = generate_image(
-                current_image_prompt,
+                scene["image_prompt"],
                 chat_id=chat_id_image,
                 image_style=image_style,
                 negative_prompt=negative_prompt,
             )
 
-            # Validate image quality — up to 2 rounds (original + 1 retry)
-            _update(job_id, step=f"Scene {i}/{total}: Validating image quality")
-            from quality_validator import validate_image
-            img_passed, improved_image_prompt = validate_image(
-                image_url, current_image_prompt, chat_id=chat_id_image or chat_id_gpt
-            )
-
-            if not img_passed:
-                logger.info(
-                    "[JOB %s] Scene %d — image failed QA, regenerating with improved prompt",
-                    job_id, i,
-                )
-                _update(job_id, step=f"Scene {i}/{total}: Regenerating image (QA retry)")
-                try:
-                    image_url = generate_image(
-                        improved_image_prompt,
-                        chat_id=chat_id_image,
-                        image_style=image_style,
-                        negative_prompt=negative_prompt,
-                    )
-                    current_image_prompt = improved_image_prompt
-                    logger.info("[JOB %s] Scene %d — image regenerated after QA", job_id, i)
-                except Exception as regen_err:
-                    logger.warning(
-                        "[JOB %s] Scene %d — image QA-regen failed (%s), keeping original",
-                        job_id, i, regen_err,
-                    )
-
             logger.info("[JOB %s] Scene %d — saving image", job_id, i)
             local_image_path = save_image(image_url, job_id, scene_num)
             image_local_url = f"/api/files/images/{os.path.basename(local_image_path)}"
 
-            # ── Video generation ──────────────────────────────────────────────
+            # ── Video generation ──────────────────────────────
             _update(job_id, step=f"Scene {i}/{total}: Generating video")
             logger.info("[JOB %s] Scene %d/%d — generating video", job_id, i, total)
             video_url = None
-            current_video_prompt = scene["video_prompt"]
             try:
                 video_url = generate_video(
                     image_url=image_url,
-                    video_prompt=current_video_prompt,
+                    video_prompt=scene["video_prompt"],
                     chat_id=chat_id_video or chat_id_image or "6a0ed42f-ecb0-8324-a176-6954e97a9a44",
                     aspect_ratio=aspect_ratio,
                     video_length=video_length,
@@ -306,13 +272,13 @@ def run_job(job_id: str):
                 logger.info("[JOB %s] Scene %d — downloading & saving video", job_id, i)
                 local_video_path = save_video(video_url, job_id, scene_num)
             except Exception as vid_err:
-                logger.warning("[JOB %s] Scene %d video failed: %s — using image as static clip", job_id, i, vid_err)
-                _update(job_id, step=f"Scene {i}/{total}: Video failed — static clip from image")
+                logger.warning("[JOB %s] Scene %d video failed: %s — using Ken Burns static clip", job_id, i, vid_err)
+                _update(job_id, step=f"Scene {i}/{total}: Video failed — animated static clip")
                 local_video_path = _make_static_clip(local_image_path, job_id, scene_num)
 
             video_local_url = f"/api/files/videos/{os.path.basename(local_video_path)}"
 
-            # Apply sound effect at clip start — only if sound_effects is enabled
+            # ── Sound effect ──────────────────────────────────
             sound_name = scene.get("sound_effect", "") or ""
             sound_name = sound_name.strip() if isinstance(sound_name, str) else ""
             if sound_effects and sound_name and sound_name.lower() not in ("null", "none", ""):
@@ -343,10 +309,13 @@ def run_job(job_id: str):
             _update(job_id, scenes=list(completed_scenes), completed_scenes=i)
 
         if not saved_video_paths:
-            raise RuntimeError("All scene video generations failed after 5 retries each — no video to combine.")
+            raise RuntimeError("All scene video generations failed — no video to combine.")
 
         skipped = total - len(saved_video_paths)
-        step_msg = f"Combining {len(saved_video_paths)}/{total} videos" + (f" ({skipped} scene(s) skipped)" if skipped else "")
+        step_msg = (
+            f"Combining {len(saved_video_paths)}/{total} videos"
+            + (f" ({skipped} scene(s) skipped)" if skipped else "")
+        )
         _update(job_id, status="combining", step=step_msg)
         logger.info("[JOB %s] %s", job_id, step_msg)
 
@@ -368,89 +337,6 @@ def run_job(job_id: str):
             outro_text=outro_text,
             bg_color=bg_color,
         )
-
-        # ── Final video quality validation ────────────────────
-        _update(job_id, status="combining", step="Validating final video quality")
-        from quality_validator import validate_final_video
-        vid_passed, improved_scenes = validate_final_video(
-            final_path, completed_scenes, chat_id=chat_id_gpt
-        )
-
-        if not vid_passed:
-            logger.info("[JOB %s] Final video failed QA — regenerating with improved prompts", job_id)
-            _update(job_id, status="combining", step="Regenerating scenes (video QA retry)")
-
-            retry_video_paths = []
-            for i, scene in enumerate(improved_scenes, 1):
-                scene_num = scene["scene"]
-                saved_img_path = os.path.join(
-                    STORAGE_DIR, "images", f"{job_id}_scene{scene_num}.png"
-                )
-                # Re-use saved image if available; use stored image_url from completed_scenes
-                orig = next((s for s in completed_scenes if s["scene"] == scene_num), {})
-                retry_image_url = orig.get("image_url", "")
-
-                _update(job_id, step=f"Scene {i}/{total}: QA-retry video generation")
-                try:
-                    retry_video_url = generate_video(
-                        image_url=retry_image_url,
-                        video_prompt=scene["video_prompt"],
-                        chat_id=chat_id_video or chat_id_image or "6a0ed42f-ecb0-8324-a176-6954e97a9a44",
-                        aspect_ratio=aspect_ratio,
-                        video_length=video_length,
-                        resolution=resolution,
-                        preset=preset,
-                        motion_strength=motion_strength,
-                        seed=seed,
-                        loop=loop,
-                        negative_video_prompt=negative_video_prompt,
-                    )
-                    retry_video_path = save_video(retry_video_url, job_id, f"{scene_num}_retry")
-                    logger.info("[JOB %s] Scene %d QA-retry video saved", job_id, scene_num)
-                except Exception as rv_err:
-                    logger.warning(
-                        "[JOB %s] Scene %d QA-retry video failed: %s — keeping original clip",
-                        job_id, scene_num, rv_err,
-                    )
-                    retry_video_path = saved_video_paths[i - 1] if i - 1 < len(saved_video_paths) else saved_video_paths[-1]
-
-                # Re-apply sound effect if enabled
-                sound_name = (scene.get("sound_effect") or "").strip()
-                if sound_effects and sound_name and sound_name.lower() not in ("null", "none", ""):
-                    sound_out = retry_video_path.replace(".mp4", "_sfx.mp4")
-                    try:
-                        retry_video_path = apply_sound_to_clip(
-                            clip_path=retry_video_path,
-                            sound_name=sound_name,
-                            output_path=sound_out,
-                        )
-                    except Exception:
-                        pass
-
-                retry_video_paths.append(retry_video_path)
-
-            if retry_video_paths:
-                _update(job_id, status="combining", step="Recombining videos after QA retry")
-                retry_job_id = f"{job_id}_retry"
-                final_path = combine_videos(
-                    video_paths=retry_video_paths,
-                    job_id=retry_job_id,
-                    background_music_url=background_music,
-                    music_volume=music_volume,
-                    music_fade_in=music_fade_in,
-                    music_fade_out=music_fade_out,
-                    fade=bool(fade),
-                    fade_duration=fade_duration,
-                    video_speed=video_speed,
-                    transition=transition,
-                    fps=fps,
-                    watermark_text=watermark_text,
-                    mute_original_audio=mute_original_audio,
-                    intro_text=intro_text,
-                    outro_text=outro_text,
-                    bg_color=bg_color,
-                )
-                logger.info("[JOB %s] QA-retry final video saved: %s", job_id, final_path)
 
         # ── Trim silence (optional) ───────────────────────────
         if trim_silence_opt:

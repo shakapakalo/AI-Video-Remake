@@ -10,7 +10,25 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-CHROMIUM_PATH = "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium"
+def _find_chromium() -> str:
+    """Auto-detect chromium binary across Replit (Nix), Ubuntu/Debian, and other Linux."""
+    import shutil, glob as _glob
+    # 1. Standard system paths
+    for candidate in ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+    # 2. Nix store (Replit) — glob for any version
+    for path in _glob.glob("/nix/store/*/bin/chromium"):
+        if os.path.isfile(path):
+            return path
+    # 3. Playwright-installed chromium
+    for path in _glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome")):
+        if os.path.isfile(path):
+            return path
+    return "chromium-browser"   # last resort — let the OS resolve it
+
+CHROMIUM_PATH = _find_chromium()
 
 SUPPORTED_DOMAINS = (
     "youtube.com", "youtu.be",

@@ -9,12 +9,6 @@ BASE = "http://217.77.8.115:7637"
 CHAT_ID = "6a0ed42f-ecb0-8324-a176-6954e97a9a44"
 AUTH_HEADER = "Bearer ranaji"
 
-SAFE_PREFIX = (
-    "Create a safe, family-friendly version of this scene. "
-    "Avoid any violent, explicit, or sensitive content. "
-)
-
-
 # Short waits — 502/timeout means VPS already burned 120s, no point waiting long
 RETRY_WAITS = [2, 4, 6, 10, 15]
 
@@ -39,15 +33,9 @@ def generate_image(
             url = _call_image_api(prompt_with_ratio, chat_id=chat_id or CHAT_ID)
             if url:
                 return url
-            # content violation — try safe prompt once then retry
-            logger.warning("Attempt %d: violation, switching to safe prompt", attempt)
-            url = _call_image_api(SAFE_PREFIX + prompt_with_ratio, chat_id=chat_id or CHAT_ID)
-            if url:
-                return url
         except RuntimeError as e:
             last_err = e
             if attempt < 5:
-                # 502 = VPS already timed out internally — retry immediately with minimal wait
                 err_str = str(e)
                 wait = 1 if "502" in err_str else RETRY_WAITS[attempt - 1]
                 logger.warning("Image attempt %d failed: %s — retrying in %ds", attempt, e, wait)
@@ -90,10 +78,6 @@ def _call_image_api(prompt: str, chat_id: str = CHAT_ID) -> str | None:
 
     data = response.json()
 
-    if _is_violation(data):
-        logger.warning("Image API returned content violation for prompt")
-        return None
-
     url = (
         data.get("data", [{}])[0].get("url")
         or data.get("url")
@@ -105,13 +89,6 @@ def _call_image_api(prompt: str, chat_id: str = CHAT_ID) -> str | None:
         raise RuntimeError(f"Image URL not found in response: {list(data.keys())}")
 
     return url
-
-
-def _is_violation(data: dict) -> bool:
-    error = str(data.get("error", "")).lower()
-    message = str(data.get("message", "")).lower()
-    violation_keywords = ["safety", "policy", "violation", "content_policy", "flagged", "rejected"]
-    return any(kw in error or kw in message for kw in violation_keywords)
 
 
 def generate_images_for_scenes(scenes: list) -> list:
