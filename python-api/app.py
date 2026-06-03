@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+import time
 from flask import Flask, request, jsonify, send_from_directory
 
 from utils import is_valid_youtube_shorts_url, error_response
@@ -10,6 +12,45 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+_STORAGE_DIR = os.path.join(os.path.dirname(__file__), "storage")
+_MAX_AGE_SECONDS = 5 * 60 * 60   # 5 hours
+_CLEANUP_INTERVAL = 30 * 60       # check every 30 minutes
+
+
+def _cleanup_old_files():
+    """Delete files older than 5 hours from images/, videos/, and final/."""
+    subdirs = ("images", "videos", "final")
+    now = time.time()
+    deleted = 0
+    for sub in subdirs:
+        folder = os.path.join(_STORAGE_DIR, sub)
+        if not os.path.isdir(folder):
+            continue
+        for fname in os.listdir(folder):
+            fpath = os.path.join(folder, fname)
+            try:
+                if os.path.isfile(fpath) and (now - os.path.getmtime(fpath)) > _MAX_AGE_SECONDS:
+                    os.remove(fpath)
+                    deleted += 1
+            except Exception as e:
+                logger.warning("Cleanup: could not delete %s — %s", fpath, e)
+    if deleted:
+        logger.info("Cleanup: deleted %d file(s) older than 5 hours", deleted)
+
+
+def _cleanup_loop():
+    """Background thread: run cleanup every 30 minutes."""
+    while True:
+        time.sleep(_CLEANUP_INTERVAL)
+        try:
+            _cleanup_old_files()
+        except Exception as e:
+            logger.error("Cleanup error: %s", e)
+
+
+_cleanup_thread = threading.Thread(target=_cleanup_loop, daemon=True)
+_cleanup_thread.start()
 
 app = Flask(__name__)
 
