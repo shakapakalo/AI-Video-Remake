@@ -4,8 +4,8 @@ A Python Flask API that generates AI-powered short videos from scene description
 
 ## Run & Operate
 
-- `python python-api/app.py` — run the Flask API (port 8080, served at `/api`)
-- Required env: `PORT` — defaults to 8080
+- `python python-api/app.py` — run the Flask API (port 3100, served at `/api`)
+- Required env: `PORT` — defaults to 3100
 
 ## Stack
 

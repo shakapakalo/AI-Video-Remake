@@ -10,7 +10,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/ai-video-remake"
 SERVICE_NAME="ai-video-remake"
-PORT="${PORT:-8080}"
+PORT="${PORT:-3100}"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[UPDATE]${NC} $*"; }

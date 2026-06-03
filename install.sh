@@ -10,7 +10,7 @@ REPO_URL="https://github.com/YOUR_USER/YOUR_REPO.git"
 INSTALL_DIR="/opt/ai-video-remake"
 SERVICE_NAME="ai-video-remake"
 PYTHON_BIN="python3"
-PORT="${PORT:-8080}"
+PORT="${PORT:-3100}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[INSTALL]${NC} $*"; }
